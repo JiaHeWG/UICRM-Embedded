@@ -31,7 +31,11 @@ Version: 2026.10.3
 
 以及浙江工业大学开源，关于遥控器部分的readme.md：https://github.com/ZJUT-Deus/2027_Reserve_Infantry/blob/main/README_I6X.md
 
-移入目录：boards/drivers/src/I6X-ZJUT.cpp； boards/drivers/include/I6X-ZJUT.h 
+移入目录：boards/drivers/src/I6X-ZJUT.cpp； boards/drivers/include/I6X-ZJUT.h
+
+### 更新：重构了sbus.c和sbus.h，原有代码不可用，并需要核实底层bsp_uart部分是否有针对dbus解码传入data，需要修改,否则新代码无法工作
+
+这里需要注意的是根据dji_dbus.cpp套件的实现中，原有解码根据struct进行位运算解析，这里的data**并非DBUS RAW数据，或者DJI的DBUS实现与文档不同**，因为我看了一圈文档感觉这里的实现不太对，至少在sbus层面我们需要直接从raw开始做解码，而这部分与原先dbus是完全不同的。
 
 浙江工业大学的实现中把整套i6x的sbus解码从dma接收数据到解码完成通道重分配塞在同一个i6x库里，我们理论上只需要移植其中解码部分即可，但是需要考虑和现有DBUS程序的兼容性。
 
@@ -39,7 +43,7 @@ Version: 2026.10.3
 
 这两部分在个人fork仓库中，push分支请务必close
 
-我目前进度推得比较慢，主要时间浪费在理解现有生产环境，抱歉。
+我目前进度推得比较慢，主要时间浪费在理解现有生产环境，先前没有实际接触/适应我们的主要程序，抱歉。
 
 By BillZH/JiaHeWG
 
