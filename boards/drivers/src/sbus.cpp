@@ -1,5 +1,5 @@
 /*###########################################################
- # Copyright (c) 2023-2024. BNU-HKBU UIC RoboMaster         #
+ # Copyright (c) 2023-2026. BNU-HKBU UIC RoboMaster         #
  #                                                          #
  # This program is free software: you can redistribute it   #
  # and/or modify it under the terms of the GNU General      #
@@ -26,101 +26,73 @@
 #include "bsp_error_handler.h"
 #include "utils.h"
 
-/* rocker range and deadzones */
-#define SBUS_RC_ROCKER_MID 1024
-#define SBUS_RC_ROCKER_ZERO_DRIFT 10  // Range of possible drift around initial position
-// Range of possible drift around min or max position
+/* iA6B SBUS 帧中摇杆通道中位点（11bit 无符号 raw 的中位） */
+#define SBUS_RC_ROCKER_MID  1024
 
 namespace remote {
 
-    // helper struct for decoding raw bytes
-    /**
-     * TEST: 这里使用结构体搭配packed进行数据包裁剪分发，
-     * TODO：移植新数据包协议分发，并需要做sbus.h库文件中的数据映射
-     * 否则后续数据可能出现溢出/死区过大等问题
-     * 遥控器具体通道详见sbus.h注释
-     * Update: 2026.10.3
-     */
-    typedef struct {
-        // uint8_t start : 8;
-        // !IMPORTANT 测试，请勿merge
-        // TODO: 注意，这里位运算假定了data包为解码后数值，需要重构SBUS RAW->通道解析，按通道完成
-        uint16_t ch0 : 11;
-        uint16_t ch1 : 11;
-        uint16_t ch2 : 11;
-        uint16_t ch3 : 11;
-        uint16_t ch4 : 11;
-        uint16_t ch5 : 11;
-        /* left and right switch information */
-        uint8_t sw0 : 2;
-        uint8_t sw1 : 2;
-        uint8_t sw2 : 2;
-        // 前三个为两档拨杆，后一个为三档拨杆，具体协议需要重构，这里只做pseudo演示
-        uint8_t sw3 : 2;
-        uint8_t flag : 8;
-        uint8_t end : 8;
-    } __packed sbus_t;
-
+    // SBUS单数据包RAW输出写死25字节，此处需要实机验证
     SBUS::SBUS(UART_HandleTypeDef* huart) : bsp::UART(huart) {
-        SetupRx(sizeof(sbus_t) + 1);
+        SetupRx(FRAME_SIZE);
     }
 
-    SBUS::MapTo660(const int16_t val) {
-        if (val >= 0)
+    int16_t SBUS::MapTo660(const int16_t val) const {
+        //   正半轴分母 783，负半轴分母 784，四舍五入 +0.5，参考开源拟合平滑取值
+        if (val >= 0) {
             return (int16_t)floorf((660.0f / 783.0f) * (float)val + 0.5f);
-        else
+        } else {
             return (int16_t)floorf((660.0f / 784.0f) * (float)val + 0.5f);
+        }
     }
 
     void SBUS::RxCompleteCallback() {
         Heartbeat();
-
-        uint8_t* data;
-        /* data frame misalignment
-        if (this->Read<true>(&data) != sizeof(sbus_t))
-            return;
-        */
-        // !IMPORTANT 移植，待验证
-        if (sbus_data[0] != 0x0F || sbus_data[24] != 0x00) {
+        uint8_t* data = nullptr;
+        // Abnormal data processing
+        if (this->Read<true>(&data) != FRAME_SIZE) {
             return;
         }
+        if (data[0] != SBUS_START_BYTE || data[24] != SBUS_END_BYTE) {
+            return;
+        }
+        // 10 of 11bit channels for sbus decoding, from i6x original source
+        // TODO:这里需要注意，SBUS与原有DBUS协议栈有很大不同，需要完全修改计算逻辑，我还没来得及回溯底层bsp_uart中有没有做dbus/sbus解码，但是这里原有写法没做，我就默认直接拉raw了
+        int16_t raw[10];
+        raw[0] = (int16_t)(((data[1]                       ) & 0x07FF) - SBUS_RC_ROCKER_MID);
+        raw[1] = (int16_t)((((data[2] >> 3) | (data[3] << 5)) & 0x07FF) - SBUS_RC_ROCKER_MID);
+        raw[2] = (int16_t)((((data[3] >> 6) | (data[4] << 2) | (data[5] << 10)) & 0x07FF) - SBUS_RC_ROCKER_MID);
+        raw[3] = (int16_t)((((data[5] >> 1) | (data[6] << 7)) & 0x07FF) - SBUS_RC_ROCKER_MID);
+        raw[4] = (int16_t)((((data[6] >> 4) | (data[7] << 4)) & 0x07FF) - SBUS_RC_ROCKER_MID);
+        raw[5] = (int16_t)((((data[7] >> 7) | (data[8] << 1) | (data[9] << 9)) & 0x07FF) - SBUS_RC_ROCKER_MID);
+        raw[6] = (int16_t)((((data[9] >> 2) | (data[10] << 6)) & 0x07FF) - SBUS_RC_ROCKER_MID);
+        raw[7] = (int16_t)((((data[10] >> 5) | (data[11] << 3)) & 0x07FF) - SBUS_RC_ROCKER_MID);
+        raw[8] = (int16_t)(((data[12] | (data[13] << 8)) & 0x07FF) - SBUS_RC_ROCKER_MID);
+        raw[9] = (int16_t)((((data[13] >> 3) | (data[14] << 5)) & 0x07FF) - SBUS_RC_ROCKER_MID);
 
-        // re-interpret the data buffer and decode into class properties
-        sbus_t* repr = reinterpret_cast<sbus_t*>(data);
-        this->ch1 = clip<int16_t>(repr->ch1 - SBUS_RC_ROCKER_MID, -660, 660);
-        this->ch2 = clip<int16_t>(repr->ch2 - SBUS_RC_ROCKER_MID, -660, 660);
-        this->ch3 = clip<int16_t>(repr->ch3 - SBUS_RC_ROCKER_MID, -660, 660);
-        this->ch4 = clip<int16_t>(repr->ch4 - SBUS_RC_ROCKER_MID, -660, 660);
-        this->ch5 = clip<int16_t>(repr->ch5 - SBUS_RC_ROCKER_MID, -660, 660);
-        this->ch6 = clip<int16_t>(repr->ch6 - SBUS_RC_ROCKER_MID, -660, 660);
-        this->ch7 = clip<int16_t>(repr->ch7 - SBUS_RC_ROCKER_MID, -660, 660);
-        this->ch8 = clip<int16_t>(repr->ch8 - SBUS_RC_ROCKER_MID, -660, 660);
-        this->ch9 = clip<int16_t>(repr->ch9 - SBUS_RC_ROCKER_MID, -660, 660);
-        this->ch10 = clip<int16_t>(repr->ch10 - SBUS_RC_ROCKER_MID, -660, 660);
-        this->ch11 = clip<int16_t>(repr->ch11 - SBUS_RC_ROCKER_MID, -660, 660);
-        this->ch12 = clip<int16_t>(repr->ch12 - SBUS_RC_ROCKER_MID, -660, 660);
-        this->ch13 = clip<int16_t>(repr->ch13 - SBUS_RC_ROCKER_MID, -660, 660);
-        this->ch14 = clip<int16_t>(repr->ch14 - SBUS_RC_ROCKER_MID, -660, 660);
-        this->ch15 = clip<int16_t>(repr->ch15 - SBUS_RC_ROCKER_MID, -660, 660);
-        this->ch16 = clip<int16_t>(repr->ch16 - SBUS_RC_ROCKER_MID, -660, 660);
-        this->ch1 = abs(this->ch1) <= SBUS_RC_ROCKER_ZERO_DRIFT ? 0 : this->ch1;
-        this->ch2 = abs(this->ch2) <= SBUS_RC_ROCKER_ZERO_DRIFT ? 0 : this->ch2;
-        this->ch3 = abs(this->ch3) <= SBUS_RC_ROCKER_ZERO_DRIFT ? 0 : this->ch3;
-        this->ch4 = abs(this->ch4) <= SBUS_RC_ROCKER_ZERO_DRIFT ? 0 : this->ch4;
-        this->ch5 = abs(this->ch5) <= SBUS_RC_ROCKER_ZERO_DRIFT ? 0 : this->ch5;
-        this->ch6 = abs(this->ch6) <= SBUS_RC_ROCKER_ZERO_DRIFT ? 0 : this->ch6;
-        this->ch7 = abs(this->ch7) <= SBUS_RC_ROCKER_ZERO_DRIFT ? 0 : this->ch7;
-        this->ch8 = abs(this->ch8) <= SBUS_RC_ROCKER_ZERO_DRIFT ? 0 : this->ch8;
-        this->ch9 = abs(this->ch9) <= SBUS_RC_ROCKER_ZERO_DRIFT ? 0 : this->ch9;
-        this->ch10 = abs(this->ch10) <= SBUS_RC_ROCKER_ZERO_DRIFT ? 0 : this->ch10;
-        this->ch11 = abs(this->ch11) <= SBUS_RC_ROCKER_ZERO_DRIFT ? 0 : this->ch11;
-        this->ch12 = abs(this->ch12) <= SBUS_RC_ROCKER_ZERO_DRIFT ? 0 : this->ch12;
-        this->ch13 = abs(this->ch13) <= SBUS_RC_ROCKER_ZERO_DRIFT ? 0 : this->ch13;
-        this->ch14 = abs(this->ch14) <= SBUS_RC_ROCKER_ZERO_DRIFT ? 0 : this->ch14;
-        this->ch15 = abs(this->ch15) <= SBUS_RC_ROCKER_ZERO_DRIFT ? 0 : this->ch15;
-        this->ch16 = abs(this->ch16) <= SBUS_RC_ROCKER_ZERO_DRIFT ? 0 : this->ch16;
-        this->flag = repr->flag;
-        this->timestamp = GetLastUptime();
+        // 摇杆通道重映射，平滑拟合
+        for (uint8_t i = 0; i < 6; ++i) {
+            ch[i] = MapTo660(raw[i]);
+        }
+
+        // sw[0]、sw[1]、sw[3]：两档拨杆（<0 视为上，>=0 视为下）
+        sw[0] = (raw[6] < 0) ? SW_2POS_UP : SW_2POS_DOWN;
+        sw[1] = (raw[7] < 0) ? SW_2POS_UP : SW_2POS_DOWN;
+        sw[3] = (raw[9] < 0) ? SW_2POS_UP : SW_2POS_DOWN;
+
+        // sw[2]：三档拨杆
+        if (raw[8] < -SW_3POS_THRESHOLD) {
+            sw[2] = SW_UP;
+        } else if (raw[8] > SW_3POS_THRESHOLD) {
+            sw[2] = SW_DOWN;
+        } else {
+            sw[2] = SW_MID;
+        }
+
+        // SBUS标志位解码，TODO:待验证
+        const uint8_t flag = data[23];
+        frame_lost = (flag >> 2) & 0x01;
+        failsafe   = (flag >> 3) & 0x01;
+        timestamp = GetLastUptime();
     }
 
 } /* namespace remote */
