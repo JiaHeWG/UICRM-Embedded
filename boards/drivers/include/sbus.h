@@ -47,8 +47,13 @@ namespace remote {
          *
          * @param huart uart instance
          */
+        /**
+         *@Note: 这部分暂时不变，等待实际上机
+         *@Author: BillZH
+         */
         SBUS(UART_HandleTypeDef* huart);
-
+        // Add for mapto660 for channel remapping
+        MapTo660(const int16_t val);
         // Add custom rx data handler
         void RxCompleteCallback() override final;
 
@@ -73,24 +78,22 @@ namespace remote {
          * @return 映射到-660~660的数据值
          * @note 此部分暂时留空 TODO
          */
-
+        // 6个通道数据
+        volatile int16_t ch0;
         volatile int16_t ch1;
         volatile int16_t ch2;
         volatile int16_t ch3;
         volatile int16_t ch4;
         volatile int16_t ch5;
-        volatile int16_t ch6;
-        volatile int16_t ch7;
-        volatile int16_t ch8;
-        volatile int16_t ch9;
-        volatile int16_t ch10;
-        volatile int16_t ch11;
-        volatile int16_t ch12;
-        volatile int16_t ch13;
-        volatile int16_t ch14;
-        volatile int16_t ch15;
-        volatile int16_t ch16;
-        volatile uint8_t flag;
+        // 4个拨杆数据
+        volatile int8_t sw1;
+        volatile int8_t sw2;
+        volatile int8_t sw3;
+        volatile int8_t sw4;
+        // 失控标志位
+        volatile uint8_t failsafe;
+        // 丢帧标志位
+        volatile uint8_t frame_lost;
 
         // timestamp of the update interrupt
         /**

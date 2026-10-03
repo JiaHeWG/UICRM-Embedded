@@ -44,6 +44,7 @@ namespace remote {
     typedef struct {
         // uint8_t start : 8;
         // !IMPORTANT 测试，请勿merge
+        // TODO: 注意，这里位运算假定了data包为解码后数值，需要重构SBUS RAW->通道解析，按通道完成
         uint16_t ch0 : 11;
         uint16_t ch1 : 11;
         uint16_t ch2 : 11;
@@ -64,13 +65,25 @@ namespace remote {
         SetupRx(sizeof(sbus_t) + 1);
     }
 
+    SBUS::MapTo660(const int16_t val) {
+        if (val >= 0)
+            return (int16_t)floorf((660.0f / 783.0f) * (float)val + 0.5f);
+        else
+            return (int16_t)floorf((660.0f / 784.0f) * (float)val + 0.5f);
+    }
+
     void SBUS::RxCompleteCallback() {
         Heartbeat();
 
         uint8_t* data;
-        // data frame misalignment
+        /* data frame misalignment
         if (this->Read<true>(&data) != sizeof(sbus_t))
             return;
+        */
+        // !IMPORTANT 移植，待验证
+        if (sbus_data[0] != 0x0F || sbus_data[24] != 0x00) {
+            return;
+        }
 
         // re-interpret the data buffer and decode into class properties
         sbus_t* repr = reinterpret_cast<sbus_t*>(data);
